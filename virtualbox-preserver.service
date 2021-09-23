@@ -1,0 +1,11 @@
+[Unit]
+Description=Global Save/Restore for VirtualBox VMs
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/virtualbox-preserver restore
+ExecStop=/usr/bin/virtualbox-preserver save
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

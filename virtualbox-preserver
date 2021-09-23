@@ -1,0 +1,116 @@
+#!/bin/sh -e
+#
+# Save the state of or restore running VMs for all users on the
+# system.
+#
+
+if [ $(id -u) -ne 0 ]
+then
+    echo "This program must be run as root." 1>&2
+    exit 1
+fi
+
+WHOAMI=$(basename $0)
+
+COMMAND="$1"
+
+PRESERVER_DIR_NAME=".${WHOAMI}"
+
+trace()
+{
+    #[ -t 1 ] && echo "$@" || true
+    echo "$@"
+}
+
+save()
+{
+    LOGIN=$1
+    UID=$2
+    GID=$3
+    HOME_DIR=$4
+
+    trace "Saving VMs for ${LOGIN}:"
+
+    PRESERVER="${HOME_DIR}/${PRESERVER_DIR_NAME}"
+
+    # TODO: Warn if there were existing VMs listed
+
+    rm -rf "${PRESERVER}"
+    mkdir -p "${PRESERVER}"
+    chown "${UID}.${GID}" "${PRESERVER}"
+    
+    su - "${LOGIN}" -c "VBoxManage list runningvms" \
+	| sed -e 's/^.*{\([^}]*\)}$/\1/' \
+	| (
+	while read VM_ID
+	do
+	    trace "    ${VM_ID}"
+	    su - "${LOGIN}" -c "VBoxManage controlvm ${VM_ID} savestate"
+	    FILE="${PRESERVER}/${VM_ID}"
+	    touch "${FILE}"
+	    chown "${UID}.${GID}" "${FILE}"
+	done
+    )
+    
+    # If $PRESERVER is empty because no VMs were running, remove it.
+    if [ $(find "${PRESERVER}" -type f | wc -l) -eq 0 ]
+    then
+	rm -rf "${PRESERVER}"
+    fi
+}
+
+
+restore()
+{
+    LOGIN=$1
+    HOME_DIR=$4
+
+    PRESERVER="${HOME_DIR}/${PRESERVER_DIR_NAME}"
+
+    if [ ! -d "${PRESERVER}" ]
+    then
+	return
+    fi
+
+    trace "Restoring VMs for ${LOGIN}:"
+    find "${PRESERVER}" -type f -print \
+	| sed -e 's|^.*/||' \
+	| (
+	while read VM_ID
+	do
+	    trace "    ${VM_ID}"
+	    su - "${LOGIN}" -c "VBoxManage startvm ${VM_ID} --type headless"
+	    rm -f "${PRESERVER}/${VM_ID}"
+	done
+	)
+    rm -rf "${PRESERVER}"
+}
+
+
+case "${COMMAND}" in
+
+    # What's valid
+    save|restore)
+	getent passwd \
+	    | cut --delimiter : --fields 1,3,4,6 \
+	    | (
+	    while read LINE
+	    do
+		LOGIN=$(echo "${LINE}" | cut --delimiter : --fields 1)
+		UID=$(echo "${LINE}" | cut --delimiter : --fields 2)
+		GID=$(echo "${LINE}" | cut --delimiter : --fields 3)
+		HOME_DIR=$(echo "${LINE}" | cut --delimiter : --fields 4)
+		if [ -e "${HOME_DIR}/VirtualBox VMs" ]
+		then
+		    ${COMMAND} "${LOGIN}" "${UID}" "${GID}" "${HOME_DIR}"
+		fi
+	    done
+	)
+	;;
+
+    # What's not
+    *)
+	echo "Unknown command '${COMMAND}'" 1>&2
+	exit 1
+
+esac
